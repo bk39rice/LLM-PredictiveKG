@@ -1,0 +1,4 @@
+FROM orca-mini
+
+PARAMETER num_ctx 4096
+SYSTEM I wil provide an article, questions about the article, and options for each question. Answer the questions and return only the answers in this form {"response": [answer1, answer2, answer3, answer4]}
