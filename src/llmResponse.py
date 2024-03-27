@@ -9,7 +9,9 @@ from llama_index.llms.openai import OpenAI
 from llama_index.core import Settings
 from llama_index.core import StorageContext
 from llama_index.llms.ollama import Ollama
+from pyvis.network import Network
 
+MODEL = "mistral"
 def extract_and_save_single_article(source, target):
     # Open and read the source file
     with open(source, 'r') as source_file:
@@ -53,7 +55,7 @@ def extract_and_save_articles(source_directory, target_directory):
                     print(f"Error decoding JSON from file: {filename}")
 
 def generate_response(prompt):
-    curl_command = f"""curl -s http://localhost:11434/api/generate -d '{{"model": "orca-mini", "prompt":"{prompt}"}}'"""
+    curl_command = f"""curl -s http://localhost:11434/api/generate -d '{{"model": {MODEL}, "prompt":"{prompt}"}}'"""
     
     process = subprocess.Popen(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     full_response = ""
@@ -149,7 +151,7 @@ def kg_query_engine(article_path):
     all_docs = reader.load_data()
 
     # define LLM
-    llm = Ollama(model="orca-mini", request_timeout=60.0)
+    llm = Ollama(model=MODEL, request_timeout=60.0)
     Settings.llm = llm
     Settings.chunk_size = 512
 
@@ -166,6 +168,32 @@ def kg_query_engine(article_path):
 
     return query_engine
 
+def kg_index(article_path):
+    reader = SimpleDirectoryReader(input_files=[article_path])
+    all_docs = reader.load_data()
+
+    # define LLM
+    llm = Ollama(model=MODEL, request_timeout=60.0)
+    Settings.llm = llm
+    Settings.chunk_size = 512
+
+    graph_store = SimpleGraphStore()
+    storage_context = StorageContext.from_defaults(graph_store=graph_store)
+
+    # NOTE: can take a while!
+    index = KnowledgeGraphIndex.from_documents(
+        all_docs,
+        max_triplets_per_chunk=2,
+        storage_context=storage_context,
+    )
+
+    return index
+def get_kg(article_path):
+    index = kg_index(article_path)
+    g = index.get_networkx_graph()
+    net = Network(notebook=True, cdn_resources="in_line", directed=True)
+    net.from_nx(g)
+    net.show("example.html")
 def parse_questions(questions):
     aggregated_questions = []
     for question in questions:
@@ -244,7 +272,8 @@ def load_json_by_line(filepath):
     return data
 
 
-createKnowledgeGraph('./quality/data/v1.0.1/QuALITY.v1.0.1.htmlstripped.dev')
+# createKnowledgeGraph('./quality/data/v1.0.1/QuALITY.v1.0.1.htmlstripped.dev')
+get_kg('./quality/data/v1.0.1/devArticles/52845.txt')
 
 # batchResults('./race-c/data/dev/')
 # createKnowledgeGraph('./race-c/data/dev/11.txt')
