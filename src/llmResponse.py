@@ -25,7 +25,7 @@ def extract_and_save_single_article(source, target):
                 target_file.write(article_content)
         except json.JSONDecodeError:
             print(f"Error decoding JSON from file")
-extract_and_save_single_article('./race-c/data/dev/11.txt', './race-c/data/devArticle/11-article.txt')
+
 def extract_and_save_articles(source_directory, target_directory):
     # Ensure the target directory exists
     if not os.path.exists(target_directory):
@@ -87,7 +87,10 @@ def formatString(string):
     return string
 
 def formatOptions(options):
-    return f'(A) {formatString(options[0])}\\n(B) {formatString(options[1])}\\n(C) {formatString(options[2])}\\n(D) {formatString(options[3])}\\n'
+    toReturn = ""
+    for i in range(len(options)):
+        toReturn += f'({i}) {formatString(options[0])}\\n'
+    return toReturn
 
 def shortStoryAccuracy(filePath):
     # parse the question, answer choices, answers, and the article
@@ -104,7 +107,7 @@ def shortStoryAccuracy(filePath):
     hallucinate = 0
     responses = []
     for i in range(len(questions)):
-        prompt = f"From the article:\\n{article}: \\n\\n{formatString(questions[i])}??\\n{formatOptions(options[i])}\\nWhat is the answer? Respond with only the letter"
+        prompt = f"From the article:\\n{article}: \\n\\n{formatString(questions[i])}??\\n{formatOptions(options[i])}\\nWhat is the answer? Respond with only the nu"
         response = generate_response(prompt)
         match = re.findall(pattern, response)
         if match:
@@ -141,22 +144,9 @@ def batchResults(filepath):
         count += 1
     print(f'Percentage: {correct/total} Correct: {correct} Total: {total} Hallucinated {hallucinate} times')
 
-def createKnowledgeGraph(articleFilePath, metadataFilePath):
-    # reader = SimpleDirectoryReader(input_dir=filepath, recursive=True)
-    # all_docs = []
-    # for docs in reader.iter_data():
-    #     # <do something with the documents per file>
-    #     print(docs)
-    #     all_docs.extend(docs)
-    reader = SimpleDirectoryReader(input_files=[articleFilePath])
+def kg_query_engine(article_path):
+    reader = SimpleDirectoryReader(input_files=[article_path])
     all_docs = reader.load_data()
-    with open(metadataFilePath, 'r') as file:
-        json_data = json.load(file)
-    
-    answers = json_data['answers']
-    options = json_data['options']
-    article = formatString(json_data['article'])
-    questions = json_data['questions']
 
     # define LLM
     llm = Ollama(model="orca-mini", request_timeout=60.0)
@@ -173,34 +163,88 @@ def createKnowledgeGraph(articleFilePath, metadataFilePath):
         storage_context=storage_context,
     )
     query_engine = index.as_query_engine(include_text=True, response_mode="tree_summarize")
-        # parse the question, answer choices, answers, and the article
-    pattern = r'([ABCD])'
 
-    # form the prompt for LLM
-    hallucinate = 0
+    return query_engine
+
+def parse_questions(questions):
+    aggregated_questions = []
+    for question in questions:
+        question_map = dict()
+        question_map['question'] = question['question']
+        question_map['options'] = []
+        for option in question['options']:
+            question_map['options'].append(option)
+        question_map['answer'] = question['gold_label']
+        aggregated_questions.append(question_map)
+    return aggregated_questions
+
+def ask_questions(questions, query_engine):
     responses = []
-    for i in range(len(questions)):
-        prompt = f"From the article:\\n{article}: \\n\\n{formatString(questions[i])}??\\n{formatOptions(options[i])}\\nWhat is the answer? Respond with only the letter"
-        response = query_engine.query(prompt)
-        print(response)
-        # match = re.findall(pattern, response)
-        # if match:
-        #     responses.append(match[0])
-        # else:
-        #     responses.append('X')
-        #     print(f'ERROR: Invalid response: {response}')
-        #     hallucinate += 1
+    answers = []
     correct = 0
-    total = 0
-    for i in range(len(responses)):
-        for j in range(len(responses[i])):
-            if responses[i][j] == answers[i][j]:
-                correct += 1
-            total += 1
-    
-    print(responses, answers)
+    for i in range(len(questions)):
+        prompt = f"From the article: \\n\\n{questions[i]['question']}??\\n{formatOptions(questions[i]['options'])}\\nWhat is the answer? Respond with only the number"
+        response = query_engine.query(prompt)
 
-createKnowledgeGraph('./race-c/data/devArticle/11-article.txt', './race-c/data/dev/11.txt')
+        # check for correctness
+        
+        # parse the question, answer choices, answers, and the article
+        pattern = r'([1234])'
+
+        # form the prompt for LLM
+        hallucinate = 0
+        match = re.findall(pattern, response)
+        if match:
+            response.append(match[0])
+        else:
+            response.append('X')
+            print(f'ERROR: Invalid response: {response}')
+            hallucinate += 1
+        if response[-1] == questions['answer']:
+            correct += 1
+        
+    return correct, len(questions)
+
+def createKnowledgeGraph(dataset_filepath):
+    # reader = SimpleDirectoryReader(input_dir=filepath, recursive=True)
+    # all_docs = []
+    # for docs in reader.iter_data():
+    #     # <do something with the documents per file>
+    #     print(docs)
+    #     all_docs.extend(docs)
+
+    json_data = load_json_by_line(dataset_filepath)
+    total_correct = 0
+    total_questions = 0
+    for single_article in json_data:
+        article_id = single_article['article_id']
+        article = single_article['article']
+        questions = single_article['questions']
+        article_path = f'./quality/data/v1.0.1/devArticles/{article_id}.txt'
+        if not os.path.exists(article_path):
+            with open(article_path, 'w') as f:
+                f.write(article)
+                f.close()
+        parsed_questions = parse_questions(questions)
+        query_engine = kg_query_engine(article_path)
+        correct, total = ask_questions(parsed_questions, query_engine)
+        total_correct += correct
+        total_questions += total
+    return total_correct, total_questions
+
+
+def load_json_by_line(filepath):
+    data = []
+    with open(filepath, 'r') as file:
+        for line in file:
+            try:
+                data.append(json.loads(line))
+            except:
+                print(f"Error parsing JSON from line")
+    return data
+
+
+createKnowledgeGraph('./quality/data/v1.0.1/QuALITY.v1.0.1.htmlstripped.dev')
 
 # batchResults('./race-c/data/dev/')
 # createKnowledgeGraph('./race-c/data/dev/11.txt')
